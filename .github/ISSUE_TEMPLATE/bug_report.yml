@@ -1,0 +1,49 @@
+name: 不具合報告
+description: 起動できない、時間がおかしい、操作が効かないなど
+title: "[Bug] "
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: 何が起きましたか？
+      description: 短くて大丈夫です。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現するまでの操作
+      description: 入力した値、使ったメニューやキー、スリープの有無など。
+      placeholder: |
+        1. 3m を入力して開始
+        2. ⇧⌘U で小窓にする
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待していた動作
+  - type: input
+    id: app_version
+    attributes:
+      label: アプリのバージョン
+      description: 「Countdown → Countdownについて」で確認できます。不明なら空欄で大丈夫です。
+  - type: input
+    id: macos
+    attributes:
+      label: macOSのバージョン
+      placeholder: 例：macOS 15.7
+  - type: dropdown
+    id: processor
+    attributes:
+      label: Macの種類
+      options:
+        - Apple Silicon（M1 / M2 / M3 など）
+        - Intel
+        - わからない
+  - type: textarea
+    id: attachments
+    attributes:
+      label: スクリーンショット・補足
+      description: 画像や動画があれば添付してください。関係ない情報は隠してもらえると助かります。

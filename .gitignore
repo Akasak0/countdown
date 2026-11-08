@@ -1,6 +1,44 @@
+# Swift / Xcode の生成物
 .build/
-dist/
-artifacts/
-.DS_Store
-*.diff
+.swiftpm/
+DerivedData/
+build/
+xcuserdata/
 *.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# ビルドしたアプリ・配布ファイル（配布時は Releases へ）
+dist/
+*.app/
+*.dSYM/
+*.zip
+*.dmg
+*.pkg
+
+# ローカルの検証結果・差分・ログ
+artifacts/
+*.diff
+*.patch
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
+._*
+
+# ローカル設定・署名用ファイル
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.p8
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
+/state.json
+/state.json.*
+
+# Package.resolved、ソース、画像、共有のプロジェクト設定は追跡する。

@@ -1,0 +1,21 @@
+name: UI・使い勝手の提案
+description: わかりにくい、使いづらい、こうなってほしいなど
+title: "[UI] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: どこが気になりましたか？
+      description: 「このボタンがわかりにくい」くらいの感想でも歓迎です。
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: どうなるとよさそうですか？
+      description: 案がなくても大丈夫です。
+  - type: textarea
+    id: context
+    attributes:
+      label: 使い方・補足
+      description: どんな用途で使っているか、画面の画像など。
