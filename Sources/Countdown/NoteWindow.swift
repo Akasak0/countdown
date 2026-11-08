@@ -1,6 +1,74 @@
 import AppKit
 import CountdownCore
 
+final class CountdownWindow: NSWindow {
+    var compactMode = false
+    private var dragStart: NSPoint?
+    private var dragOrigin = NSPoint.zero
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    func setCompactMode(_ compact: Bool) {
+        compactMode = compact
+        let savedFrame = frame
+        // A hidden title bar still carries the system's titled-window movement
+        // restrictions. Remove the title bar itself in the compact mode.
+        styleMask = compact ? [.borderless, .closable, .miniaturizable, .resizable]
+            : [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        titlebarAppearsTransparent = true
+        titleVisibility = .hidden
+        isMovable = !compact
+        isMovableByWindowBackground = !compact
+        setFrame(savedFrame, display: true)
+    }
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        guard compactMode else { return super.constrainFrameRect(frameRect, to: screen) }
+        // Compact notes may occupy the unused space beside the Dock.
+        guard let screen else { return frameRect }
+        var result = frameRect
+        result.origin.x = max(screen.frame.minX, min(result.minX, screen.frame.maxX - result.width))
+        result.origin.y = max(screen.frame.minY, min(result.minY, screen.visibleFrame.maxY - result.height))
+        return result
+    }
+
+    override func performClose(_ sender: Any?) {
+        if compactMode { close() }
+        else { super.performClose(sender) }
+    }
+
+    private func startNoteDrag(with event: NSEvent) {
+        dragStart = convertPoint(toScreen: event.locationInWindow)
+        dragOrigin = frame.origin
+    }
+
+    private func dragNote(with event: NSEvent) {
+        guard let dragStart else { return }
+        let mouse = convertPoint(toScreen: event.locationInWindow)
+        let proposed = NSRect(x: dragOrigin.x + mouse.x - dragStart.x,
+                              y: dragOrigin.y + mouse.y - dragStart.y, width: frame.width, height: frame.height)
+        let target = NSScreen.screens.first { $0.frame.contains(mouse) } ?? screen
+        setFrameOrigin(constrainFrameRect(proposed, to: target).origin)
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        guard compactMode else { super.sendEvent(event); return }
+        switch event.type {
+        case .leftMouseDown where event.clickCount == 1:
+            // Keep the outer edge available for the native resize interaction.
+            let interior = NSRect(origin: .zero, size: frame.size).insetBy(dx: 6, dy: 6)
+            if interior.contains(event.locationInWindow) {
+                makeKeyAndOrderFront(nil)
+                startNoteDrag(with: event)
+            } else { super.sendEvent(event) }
+        case .leftMouseDragged where dragStart != nil: dragNote(with: event)
+        case .leftMouseUp where dragStart != nil: dragStart = nil
+        default: super.sendEvent(event)
+        }
+    }
+}
+
 extension NoteColor {
     var nsColor: NSColor {
         NSColor(name: nil) { appearance in
@@ -24,11 +92,13 @@ final class NoteView: NSView {
     var background: NSColor = .windowBackgroundColor { didSet { needsDisplay = true } }
     var relayout: (() -> Void)?
     var doubleClick: (() -> Void)?
+    var rounded = false { didSet { needsDisplay = true } }
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
     override func draw(_ dirtyRect: NSRect) {
         background.setFill()
-        bounds.fill()
+        if rounded { NSBezierPath(roundedRect: bounds, xRadius: 14, yRadius: 14).fill() }
+        else { bounds.fill() }
     }
     override func layout() { super.layout(); relayout?() }
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
@@ -66,18 +136,19 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
     init(note: TimerNote, app: AppController) {
         self.id = note.id
         self.app = app
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 286, height: 196),
+        let window = CountdownWindow(contentRect: NSRect(x: 0, y: 0, width: 286, height: 196),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
         super.init(window: window)
         window.delegate = self
+        window.setCompactMode(note.isCompact)
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isOpaque = false
         window.backgroundColor = .clear
         window.alphaValue = 1
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = !note.isCompact
         window.contentMinSize = note.isCompact ? NSSize(width: 120, height: 60) : NSSize(width: 220, height: 164)
         window.contentMaxSize = NSSize(width: 900, height: 600)
         window.contentView = surface
@@ -119,7 +190,10 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         for view in [labelField, inputField, value, hint, start, edit, details, look, pause] { surface.addSubview(view) }
         if let frame = note.frame {
             let saved = NSRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
-            if NSScreen.screens.contains(where: { $0.visibleFrame.intersection(saved).width >= 80 && $0.visibleFrame.intersection(saved).height >= 60 }) {
+            if NSScreen.screens.contains(where: {
+                let bounds = note.isCompact ? $0.frame : $0.visibleFrame
+                return bounds.intersection(saved).width >= 80 && bounds.intersection(saved).height >= 60
+            }) {
                 window.setFrame(saved, display: false)
             } else { positionNewWindow() }
         } else { positionNewWindow() }
@@ -148,6 +222,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         window?.title = note.label.isEmpty ? "タイマー" : note.label
         let running = note.deadline != nil && !note.isFinished(at: now) || note.pausedRemaining != nil
         let compact = note.isCompact
+        surface.rounded = compact
         let inputMode = !compact && (editing || !running)
         let justFinished = inputField.isHidden && inputMode && note.isFinished(at: now)
         labelField.isHidden = compact
@@ -282,6 +357,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
             if compact { $0.expandedFrame = $0.frame }
             $0.controlsHidden = compact
         }
+        (window as? CountdownWindow)?.setCompactMode(compact)
         window.contentMinSize = compact ? NSSize(width: 120, height: 60) : NSSize(width: 220, height: 164)
         update(at: Date())
         let size: NSSize
@@ -293,7 +369,13 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         window.setContentSize(size)
         window.setFrameTopLeftPoint(topLeft)
         if let screen = window.screen {
-            window.setFrame(window.constrainFrameRect(window.frame, to: screen), display: true)
+            var frame = window.constrainFrameRect(window.frame, to: screen)
+            if !compact {
+                let bounds = screen.visibleFrame
+                frame.origin.x = max(bounds.minX, min(frame.minX, bounds.maxX - frame.width))
+                frame.origin.y = max(bounds.minY, min(frame.minY, bounds.maxY - frame.height))
+            }
+            window.setFrame(frame, display: true)
         }
         saveFrame()
         if !compact, note.deadline == nil || note.isFinished(at: Date()) { focusInput() }
