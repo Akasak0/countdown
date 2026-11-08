@@ -8,7 +8,7 @@ final class SettingsController: NSWindowController {
     private let opacity = NSSlider(value: 0.7, minValue: 0.15, maxValue: 1, target: nil, action: nil)
     private let opacityLabel = NSTextField(labelWithString: "")
     private let floating = NSButton(checkboxWithTitle: "最前面に表示", target: nil, action: nil)
-    private let seconds = NSButton(checkboxWithTitle: "秒まで表示する（OFFなら分単位）", target: nil, action: nil)
+    private let displayMode = NSPopUpButton()
     private let pause = NSButton(checkboxWithTitle: "相対時間の一時停止を有効にする", target: nil, action: nil)
     private let sound = NSButton(checkboxWithTitle: "終了時に短い音を鳴らす", target: nil, action: nil)
     private let notifications = NSButton(checkboxWithTitle: "終了時にシステム通知を出す", target: nil, action: nil)
@@ -17,7 +17,7 @@ final class SettingsController: NSWindowController {
     init(app: AppController, noteID: UUID?) {
         self.app = app
         self.noteID = noteID
-        let height: CGFloat = noteID == nil ? 468 : 236
+        let height: CGFloat = noteID == nil ? 468 : 206
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 370, height: height),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = noteID == nil ? "設定" : "このタイマーの外観"
@@ -52,18 +52,18 @@ final class SettingsController: NSWindowController {
             let heading = NSTextField(labelWithString: "すべてのタイマーに適用")
             heading.font = .systemFont(ofSize: 13, weight: .semibold)
             stack.addArrangedSubview(heading)
-            for control in [seconds, pause, sound, notifications, confetti] { stack.addArrangedSubview(control) }
+            displayMode.addItems(withTitles: TimeDisplayMode.allCases.map(\.title))
+            displayMode.setAccessibilityLabel("残り時間の表示")
+            let displayRow = NSStackView(views: [NSTextField(labelWithString: "残り時間の表示"), displayMode])
+            displayRow.spacing = 16
+            stack.addArrangedSubview(displayRow)
+            for control in [pause, sound, notifications, confetti] { stack.addArrangedSubview(control) }
             let footer = NSTextField(wrappingLabelWithString: "音・通知・紙吹雪は初期OFFです。\nスリープ中に終了した場合は、復帰後の終了表示のみ。")
             footer.font = .systemFont(ofSize: 11)
             footer.textColor = .secondaryLabelColor
             stack.addArrangedSubview(footer)
-        } else {
-            let footer = NSTextField(labelWithString: "文字は透けず、背景だけが透けます。")
-            footer.font = .systemFont(ofSize: 11)
-            footer.textColor = .secondaryLabelColor
-            stack.addArrangedSubview(footer)
         }
-        for control in [colors, opacity, floating, seconds, pause, sound, notifications, confetti] as [NSControl] {
+        for control in [colors, opacity, floating, displayMode, pause, sound, notifications, confetti] as [NSControl] {
             control.target = self
             control.action = #selector(changed(_:))
         }
@@ -82,7 +82,9 @@ final class SettingsController: NSWindowController {
         opacity.doubleValue = look.opacity
         opacityLabel.stringValue = String(format: "背景の不透明度 %.2f", look.opacity)
         floating.state = look.floating ? .on : .off
-        seconds.state = prefs.showSeconds ? .on : .off
+        if noteID == nil {
+            displayMode.selectItem(at: TimeDisplayMode.allCases.firstIndex(of: prefs.effectiveDisplayMode) ?? 0)
+        }
         pause.state = prefs.pauseEnabled ? .on : .off
         sound.state = prefs.soundEnabled ? .on : .off
         notifications.state = prefs.notificationsEnabled ? .on : .off
@@ -101,7 +103,8 @@ final class SettingsController: NSWindowController {
         } else {
             var prefs = app.state.preferences
             prefs.appearance = look
-            prefs.showSeconds = seconds.state == .on
+            prefs.displayMode = TimeDisplayMode.allCases[max(0, displayMode.indexOfSelectedItem)]
+            prefs.showSeconds = prefs.displayMode == .seconds
             prefs.pauseEnabled = pause.state == .on
             prefs.soundEnabled = sound.state == .on
             prefs.confettiEnabled = confetti.state == .on

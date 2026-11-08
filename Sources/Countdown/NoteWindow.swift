@@ -20,6 +20,7 @@ final class CountdownWindow: NSWindow {
         titleVisibility = .hidden
         isMovable = !compact
         isMovableByWindowBackground = !compact
+        isExcludedFromWindowsMenu = false
         setFrame(savedFrame, display: true)
     }
 
@@ -121,13 +122,13 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
     unowned let app: AppController
     let surface = NoteView()
     let labelField = NSTextField()
+    let compactLabel = CountdownLabel(labelWithString: "")
     let inputField = NSTextField()
     let value = CountdownLabel(labelWithString: "")
     let hint = NSTextField(wrappingLabelWithString: "")
     let start = NSButton(title: "開始", target: nil, action: nil)
-    let edit = NSButton(title: "変更", target: nil, action: nil)
-    let details = NSButton(title: "詳細…", target: nil, action: nil)
-    let look = NSButton(title: "外観…", target: nil, action: nil)
+    let details = NSButton(title: "", target: nil, action: nil)
+    let look = NSButton(title: "", target: nil, action: nil)
     let pause = NSButton(title: "一時停止", target: nil, action: nil)
     var editing = false
     private var error: String?
@@ -156,6 +157,13 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         surface.relayout = { [weak self] in self?.layoutContents() }
         surface.doubleClick = { [weak self] in self?.editTime() }
         value.doubleClick = { [weak self] in self?.editTime() }
+        compactLabel.doubleClick = { [weak self] in self?.editLabel() }
+        compactLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        compactLabel.textColor = .secondaryLabelColor
+        compactLabel.alignment = .center
+        compactLabel.lineBreakMode = .byTruncatingTail
+        compactLabel.maximumNumberOfLines = 1
+        compactLabel.setAccessibilityLabel("タイマーのラベル")
         value.maximumNumberOfLines = 1
         value.lineBreakMode = .byClipping
         value.setAccessibilityHelp("ダブルクリックで時間を設定。右クリックで操作UIを表示できます。")
@@ -165,6 +173,8 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         labelField.placeholderString = "ラベル（任意）"
         labelField.font = .systemFont(ofSize: 13, weight: .medium)
         labelField.delegate = self
+        labelField.target = self
+        labelField.action = #selector(commitLabel)
         labelField.stringValue = note.label
         labelField.setAccessibilityLabel("タイマーのラベル")
         inputField.placeholderString = "17:45 または 3m"
@@ -179,7 +189,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.maximumNumberOfLines = 2
-        for (button, action) in [(start, #selector(beginTimer)), (edit, #selector(editTime)),
+        for (button, action) in [(start, #selector(beginTimer)),
             (details, #selector(showDetails)), (look, #selector(showAppearance)), (pause, #selector(togglePause))] {
             button.bezelStyle = .rounded
             button.controlSize = .small
@@ -187,7 +197,9 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
             button.target = self
             button.action = action
         }
-        for view in [labelField, inputField, value, hint, start, edit, details, look, pause] { surface.addSubview(view) }
+        setIcon(details, symbol: "calendar", label: "終了日時を指定")
+        setIcon(look, symbol: "slider.horizontal.3", label: "色・不透明度・最前面表示")
+        for view in [labelField, compactLabel, inputField, value, hint, start, details, look, pause] { surface.addSubview(view) }
         if let frame = note.frame {
             let saved = NSRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
             if NSScreen.screens.contains(where: {
@@ -219,13 +231,20 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
 
     func update(at now: Date) {
         guard let note = app.note(id) else { return }
-        window?.title = note.label.isEmpty ? "タイマー" : note.label
+        let title = note.label.isEmpty ? "タイマー" : note.label
+        if let window, window.title != title {
+            window.title = title
+            NSApp.changeWindowsItem(window, title: title, filename: false)
+        }
         let running = note.deadline != nil && !note.isFinished(at: now) || note.pausedRemaining != nil
         let compact = note.isCompact
         surface.rounded = compact
         let inputMode = !compact && (editing || !running)
         let justFinished = inputField.isHidden && inputMode && note.isFinished(at: now)
         labelField.isHidden = compact
+        compactLabel.isHidden = !compact || note.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        compactLabel.stringValue = note.label
+        compactLabel.toolTip = note.label
         hint.isHidden = compact
         details.isHidden = compact
         let menuTitle = compact ? "操作UIを表示" : "操作UIを隠す"
@@ -236,12 +255,12 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         inputField.isHidden = !inputMode
         start.isHidden = !inputMode
         value.isHidden = !compact && inputMode
-        edit.isHidden = compact || !running || editing
         pause.isHidden = compact || !running || editing || (!app.state.preferences.pauseEnabled && note.pausedRemaining == nil)
             || note.specification?.canPause != true
-        pause.title = note.pausedRemaining == nil ? "一時停止" : "再開"
+        setIcon(pause, symbol: note.pausedRemaining == nil ? "pause.fill" : "play.fill",
+                label: note.pausedRemaining == nil ? "一時停止" : "再開")
         if let seconds = note.remaining(at: now) {
-            value.stringValue = RemainingTime.text(seconds: seconds, showSeconds: app.state.preferences.showSeconds)
+            value.stringValue = RemainingTime.text(seconds: seconds, mode: app.state.preferences.effectiveDisplayMode)
         }
         if compact {
             if note.isFinished(at: now) { value.stringValue = "終了しました" }
@@ -284,28 +303,42 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         guard w > 0 else { return }
         if app.note(id)?.isCompact == true {
             look.isHidden = true
+            let top: CGFloat = compactLabel.isHidden ? 6 : 25
+            let availableHeight = h - top - 6
+            compactLabel.frame = NSRect(x: 8, y: 6, width: w - 16, height: 16)
             let reference = NSFont.monospacedDigitSystemFont(ofSize: 36, weight: .medium)
             let measured = (value.stringValue as NSString).size(withAttributes: [.font: reference])
-            let scale = min((w - 16) / max(1, measured.width), (h - 12) / max(1, measured.height))
+            let scale = min((w - 16) / max(1, measured.width), (availableHeight - 2) / max(1, measured.height))
             value.font = .monospacedDigitSystemFont(ofSize: min(82, max(12, floor(36 * scale))), weight: .medium)
             let height = (value.stringValue as NSString).size(withAttributes: [.font: value.font!]).height + 2
-            value.frame = NSRect(x: 8, y: (h - height) / 2, width: w - 16, height: height)
+            value.frame = NSRect(x: 8, y: top + (availableHeight - height) / 2, width: w - 16, height: height)
             return
         }
         labelField.frame = NSRect(x: 16, y: 32, width: w - 32, height: 22)
         inputField.frame = NSRect(x: 16, y: 65, width: w - 86, height: 28)
         start.frame = NSRect(x: w - 66, y: 65, width: 52, height: 28)
         value.frame = NSRect(x: 12, y: 56, width: w - 24, height: max(32, h - 128))
-        let count = CGFloat(max(5, value.stringValue.count))
-        value.font = .monospacedDigitSystemFont(ofSize: max(22, min(82, min((w - 28) / (count * 0.65), (h - 110) * 0.7))), weight: .medium)
+        let reference = NSFont.monospacedDigitSystemFont(ofSize: 36, weight: .medium)
+        let measured = (value.stringValue as NSString).size(withAttributes: [.font: reference])
+        let scale = min((w - 28) / max(1, measured.width), (value.frame.height - 2) / max(1, measured.height))
+        value.font = .monospacedDigitSystemFont(ofSize: max(12, min(82, floor(36 * scale))), weight: .medium)
         hint.frame = NSRect(x: 16, y: h - 70, width: w - 32, height: 28)
-        details.frame = NSRect(x: 10, y: h - 34, width: 54, height: 24)
-        edit.frame = NSRect(x: 65, y: h - 34, width: 48, height: 24)
-        pause.frame = NSRect(x: 112, y: h - 34, width: 70, height: 24)
-        look.frame = NSRect(x: w - 64, y: h - 34, width: 54, height: 24)
-        // At compact widths, appearance stays available from the menu.
-        look.isHidden = !pause.isHidden && w < 260
+        details.frame = NSRect(x: 12, y: h - 34, width: 30, height: 24)
+        pause.frame = NSRect(x: 48, y: h - 34, width: 30, height: 24)
+        look.frame = NSRect(x: w - 42, y: h - 34, width: 30, height: 24)
+        look.isHidden = false
     }
+
+    private func setIcon(_ button: NSButton, symbol: String, label: String) {
+        guard button.toolTip != label else { return }
+        button.title = ""
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        button.imagePosition = .imageOnly
+        button.toolTip = label
+        button.setAccessibilityLabel(label)
+    }
+
+    @objc private func commitLabel() { window?.makeFirstResponder(nil) }
 
     func focusInput() {
         guard app.note(id)?.isCompact != true else { return }
@@ -394,28 +427,35 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         _ = add("時間を設定…", #selector(contextEdit(_:)))
         _ = add("ラベルを編集…", #selector(contextLabel(_:)))
         _ = add("外観…", #selector(contextAppearance(_:)))
-        let close = NSMenuItem(title: "閉じる", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "")
-        close.target = window
+        let close = NSMenuItem(title: "閉じる", action: #selector(contextClose(_:)), keyEquivalent: "")
+        close.target = self
         menu.addItem(.separator())
         menu.addItem(close)
         surface.menu = menu
         value.menu = menu
+        compactLabel.menu = menu
     }
 
     @objc private func contextToggle(_ sender: NSMenuItem) { toggleControls() }
     @objc private func contextEdit(_ sender: NSMenuItem) { editTime() }
     @objc private func contextLabel(_ sender: NSMenuItem) { editLabel() }
     @objc private func contextAppearance(_ sender: NSMenuItem) { showAppearance() }
+    @objc private func contextClose(_ sender: NSMenuItem) { window?.close() }
 
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField else { return }
         if field === labelField {
             app.modify(id) { $0.label = String(field.stringValue.prefix(100)) }
             window?.title = field.stringValue.isEmpty ? "タイマー" : field.stringValue
+            if let window { NSApp.changeWindowsItem(window, title: window.title, filename: false) }
         } else { error = nil; updatePreview(at: Date()) }
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if control === labelField, commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            commitLabel()
+            return true
+        }
         if commandSelector == #selector(NSResponder.cancelOperation(_:)), control === inputField, editing {
             editing = false
             error = nil

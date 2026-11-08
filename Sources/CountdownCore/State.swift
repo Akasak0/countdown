@@ -25,6 +25,8 @@ public struct Appearance: Codable, Equatable {
 public struct Preferences: Codable {
     public var appearance = Appearance()
     public var showSeconds = false
+    public var displayMode: TimeDisplayMode?
+    public var effectiveDisplayMode: TimeDisplayMode { displayMode ?? (showSeconds ? .seconds : .minutes) }
     public var pauseEnabled = false
     public var soundEnabled = false
     public var notificationsEnabled = false

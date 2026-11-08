@@ -132,6 +132,29 @@ import Foundation
         checkThrows(try TimeSpecification.date(Date(timeIntervalSince1970: 0)).deadline(from: Date()))
     }
 
+    @Test func testAutomaticDisplayAtUnitBoundaries() {
+        for (seconds, text) in [(0.0, "0秒"), (0.2, "1秒"), (45, "45秒"), (59, "59秒"),
+            (59.2, "1分0秒"), (60, "1分0秒"), (1425, "23分45秒"), (3599, "59分59秒"),
+            (3600, "1時間0分"), (4980, "1時間23分"), (86400, "1日0時間")] {
+            checkEqual(RemainingTime.text(seconds: seconds, mode: .automatic), text)
+        }
+    }
+
+    @Test func testDisplayModePreservesLegacyPreferencesAndDeadline() throws {
+        var prefs = Preferences()
+        prefs.showSeconds = true
+        let old = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(prefs))
+        checkEqual(old.effectiveDisplayMode, .seconds)
+        prefs.displayMode = .automatic
+        let restored = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(prefs))
+        checkEqual(restored.effectiveDisplayMode, .automatic)
+        let now = Date()
+        var note = TimerNote()
+        try note.start(input: "3m", specification: .duration(180), now: now, order: 1)
+        for mode in TimeDisplayMode.allCases { _ = RemainingTime.text(seconds: note.remaining(at: now)!, mode: mode) }
+        checkEqual(note.deadline, now.addingTimeInterval(180))
+    }
+
     @Test func testOldStateAndCompactWindowRestoration() throws {
         let now = Date()
         var note = TimerNote()

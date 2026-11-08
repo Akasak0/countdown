@@ -7,7 +7,7 @@ public enum TimeInputError: Error, LocalizedError {
         switch self {
         case .invalid: return "17:45 または 3m の形式で入力してください。"
         case .tooLong: return "時間の長さは365日以内で指定してください。"
-        case .pastDate: return "指定した日時は過ぎています。詳細設定で変更してください。"
+        case .pastDate: return "指定した日時は過ぎています。終了日時を指定し直してください。"
         }
     }
 }
@@ -65,7 +65,35 @@ public enum TimeSpecification: Codable, Equatable {
     }
 }
 
+public enum TimeDisplayMode: String, Codable, CaseIterable {
+    case minutes, seconds, automatic
+
+    public var title: String {
+        switch self {
+        case .minutes: return "分"
+        case .seconds: return "時:分:秒"
+        case .automatic: return "自動"
+        }
+    }
+}
+
 public enum RemainingTime {
+    public static func text(seconds: TimeInterval, mode: TimeDisplayMode) -> String {
+        guard mode == .automatic else { return text(seconds: seconds, showSeconds: mode == .seconds) }
+        let safe = seconds.isFinite ? max(0, min(seconds, TimeInterval(Int.max / 2))) : 0
+        let rounded = Int(ceil(safe))
+        if rounded >= 86400 {
+            let hours = Int(ceil(safe / 3600))
+            return "\(hours / 24)日\(hours % 24)時間"
+        }
+        if rounded >= 3600 {
+            let minutes = Int(ceil(safe / 60))
+            return "\(minutes / 60)時間\(minutes % 60)分"
+        }
+        if rounded >= 60 { return "\(rounded / 60)分\(rounded % 60)秒" }
+        return "\(rounded)秒"
+    }
+
     public static func text(seconds: TimeInterval, showSeconds: Bool) -> String {
         let seconds = seconds.isFinite ? max(0, min(seconds, TimeInterval(Int.max / 2))) : 0
         if showSeconds {

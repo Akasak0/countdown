@@ -84,6 +84,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         let controller = NoteWindowController(note: note, app: self)
         controllers[note.id] = controller
         controller.window?.makeKeyAndOrderFront(nil)
+        if let window = controller.window { NSApp.addWindowsItem(window, title: window.title, filename: false) }
         controller.saveFrame()
         if focus { controller.focusInput() }
     }
@@ -107,6 +108,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     func close(_ id: UUID) {
         guard !terminating else { return }
         controllers[id]?.saveFrame()
+        if let window = controllers[id]?.window { NSApp.removeWindowsItem(window) }
         state.archive(id)
         appearanceWindows.removeValue(forKey: id)?.close()
         controllers.removeValue(forKey: id)
@@ -293,6 +295,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     @objc private func labelActive(_ sender: Any?) { active?.editLabel() }
     @objc private func controlsActive(_ sender: Any?) { active?.toggleControls() }
     @objc private func pauseActive(_ sender: Any?) { active?.togglePause() }
+    @objc private func closeKeyWindow(_ sender: Any?) {
+        guard NSApp.modalWindow == nil, let window = NSApp.keyWindow, window.attachedSheet == nil, !window.isSheet else { return }
+        window.close()
+    }
     @objc private func floatActive(_ sender: Any?) {
         guard let active else { return }
         modify(active.id) { $0.appearance.floating.toggle() }
@@ -311,13 +317,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     @objc private func showHelp(_ sender: Any?) {
         let alert = NSAlert()
         alert.messageText = "時間の付箋を置く"
-        alert.informativeText = "17:45 / 9:5:3 → 次に来るその時刻\n3m / 1h30m / 90s → 今からその長さ\n\n空欄でEnter → 前回の指定を再利用\n日付を指定 → 詳細…\n\n⌘N 新規　⌘W 閉じる　⇧⌘T 復元\n⌘M 最小化　⌘H アプリを隠す\n⌘, 設定　⌘Q 保存して終了\n\n最小化やスリープでも時間は進みます。\n表示は最初は分単位、音はOFFです。\n\n閉じた窓は直近30件まで復元できます。\n閉じた窓は通知せず、復元時に元の締切から表示します。"
+        alert.informativeText = "17:45 / 9:5:3 → 次に来るその時刻\n3m / 1h30m / 90s → 今からその長さ\n\n空欄でEnter → 前回の指定を再利用\n数字をダブルクリック → 時間を変更\nカレンダーボタン → 終了日時を指定\nスライダーボタン → この窓の外観\n\n⌘N 新規　⌘W 閉じる　⇧⌘T 復元\n⇧⌘U 操作UIの表示切り替え\n⌘M 最小化　⌘H アプリを隠す\n⌘, 設定　⌘Q 保存して終了\n\n設定で表示を分・時:分:秒・自動から選べます。\n小窓でもラベルがあれば表示します。\n最小化やスリープでも時間は進みます。\n\n閉じた窓は直近30件まで復元できます。\n閉じた窓は通知せず、復元時に元の締切から表示します。"
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(closeKeyWindow(_:)):
+            guard NSApp.modalWindow == nil, let window = NSApp.keyWindow else { return false }
+            return window.attachedSheet == nil && !window.isSheet
         case #selector(restoreTimer(_:)): return !state.closed.isEmpty
         case #selector(editActive(_:)), #selector(detailsActive(_:)), #selector(appearanceActive(_:)), #selector(labelActive(_:)), #selector(resizeActive(_:)):
             return active != nil
@@ -363,7 +372,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         add(app, "Countdownを終了", #selector(NSApplication.terminate(_:)), "q", target: NSApp)
         let file = section("ファイル")
         add(file, "新規タイマー", #selector(newTimer(_:)), "n", target: self)
-        add(file, "ウィンドウを閉じる", #selector(NSWindow.performClose(_:)), "w")
+        add(file, "ウィンドウを閉じる", #selector(closeKeyWindow(_:)), "w", target: self)
         add(file, "最後に閉じたタイマーを復元", #selector(restoreTimer(_:)), "t", target: self, shift: true)
         let edit = section("編集")
         add(edit, "取り消す", Selector(("undo:")), "z")
@@ -375,7 +384,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         add(edit, "すべてを選択", #selector(NSText.selectAll(_:)), "a")
         let timer = section("タイマー")
         add(timer, "時間を設定…", #selector(editActive(_:)), target: self)
-        add(timer, "詳細設定…", #selector(detailsActive(_:)), target: self)
+        add(timer, "終了日時を指定…", #selector(detailsActive(_:)), target: self)
         add(timer, "ラベルを編集…", #selector(labelActive(_:)), target: self)
         add(timer, "一時停止", #selector(pauseActive(_:)), target: self)
         let view = section("表示")
