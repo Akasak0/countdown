@@ -131,6 +131,30 @@ import Foundation
     @Test func testExpiredExplicitDateCannotRestartAccidentally() {
         checkThrows(try TimeSpecification.date(Date(timeIntervalSince1970: 0)).deadline(from: Date()))
     }
+
+    @Test func testOldStateAndCompactWindowRestoration() throws {
+        let now = Date()
+        var note = TimerNote()
+        try note.start(input: "3m", specification: .duration(180), now: now, order: 1)
+        // Existing users have neither of the new fields in their saved JSON.
+        let oldJSON = try JSONEncoder().encode(note)
+        let oldNote = try JSONDecoder().decode(TimerNote.self, from: oldJSON)
+        checkFalse(oldNote.isCompact)
+        checkEqual(oldNote.deadline, now.addingTimeInterval(180))
+
+        note.controlsHidden = true
+        note.expandedFrame = WindowFrame(x: 20, y: 40, width: 286, height: 196)
+        note.frame = WindowFrame(x: 20, y: 40, width: 120, height: 60)
+        var state = AppState()
+        state.open = [note]
+        state.archive(note.id)
+        var decoded = try JSONDecoder().decode(AppState.self, from: JSONEncoder().encode(state))
+        let restored = decoded.restoreLast()!
+        checkTrue(restored.isCompact)
+        checkEqual(restored.frame?.width, 120)
+        checkEqual(restored.expandedFrame?.width, 286)
+        checkEqual(restored.remaining(at: now.addingTimeInterval(120)), 60)
+    }
 }
 
 private func checkEqual<T: Equatable>(_ actual: T, _ expected: T) { #expect(actual == expected) }

@@ -290,7 +290,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     @objc private func editActive(_ sender: Any?) { active?.editTime() }
     @objc private func detailsActive(_ sender: Any?) { active?.showDetails() }
     @objc private func appearanceActive(_ sender: Any?) { active?.showAppearance() }
-    @objc private func labelActive(_ sender: Any?) { if let active { active.window?.makeFirstResponder(active.labelField); active.labelField.selectText(nil) } }
+    @objc private func labelActive(_ sender: Any?) { active?.editLabel() }
+    @objc private func controlsActive(_ sender: Any?) { active?.toggleControls() }
     @objc private func pauseActive(_ sender: Any?) { active?.togglePause() }
     @objc private func floatActive(_ sender: Any?) {
         guard let active else { return }
@@ -298,8 +299,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         if let note = note(active.id) { active.applyAppearance(note.appearance) }
     }
     @objc private func resizeActive(_ sender: NSMenuItem) {
-        guard let window = active?.window else { return }
-        let size: NSSize = sender.tag == 0 ? NSSize(width: 232, height: 176)
+        guard let active, let window = active.window else { return }
+        let compact = note(active.id)?.isCompact == true
+        let size: NSSize = sender.tag == 0 ? (compact ? NSSize(width: 120, height: 60) : NSSize(width: 220, height: 164))
             : sender.tag == 1 ? NSSize(width: 320, height: 220) : NSSize(width: 480, height: 300)
         let top = window.frame.maxY
         window.setContentSize(size)
@@ -321,6 +323,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             return active != nil
         case #selector(floatActive(_:)):
             item.state = active.flatMap { note($0.id)?.appearance.floating } == true ? .on : .off
+            return active != nil
+        case #selector(controlsActive(_:)):
+            item.title = active.flatMap { note($0.id)?.isCompact } == true ? "操作UIを表示" : "操作UIを隠す"
             return active != nil
         case #selector(pauseActive(_:)):
             guard let active, let note = note(active.id) else { return false }
@@ -374,6 +379,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         add(timer, "ラベルを編集…", #selector(labelActive(_:)), target: self)
         add(timer, "一時停止", #selector(pauseActive(_:)), target: self)
         let view = section("表示")
+        add(view, "操作UIを隠す", #selector(controlsActive(_:)), "u", target: self, shift: true)
         add(view, "最前面に表示", #selector(floatActive(_:)), target: self)
         add(view, "このタイマーの外観…", #selector(appearanceActive(_:)), target: self)
         for (index, title) in ["小さく", "標準サイズ", "大きく"].enumerated() {

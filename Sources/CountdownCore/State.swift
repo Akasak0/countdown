@@ -50,6 +50,11 @@ public struct TimerNote: Codable, Identifiable {
     public var inputOrder = 0
     public var appearance: Appearance
     public var frame: WindowFrame?
+    // Optional fields keep state files created by 0.1 readable.
+    public var controlsHidden: Bool?
+    public var expandedFrame: WindowFrame?
+
+    public var isCompact: Bool { controlsHidden == true }
 
     public init(appearance: Appearance = Appearance()) { self.appearance = appearance }
 
