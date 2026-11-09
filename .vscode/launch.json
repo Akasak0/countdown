@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:countdown}",
+      "name": "Debug Countdown",
+      "target": "Countdown",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug Countdown"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:countdown}",
+      "name": "Release Countdown",
+      "target": "Countdown",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release Countdown"
+    }
+  ]
+}
