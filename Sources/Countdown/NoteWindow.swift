@@ -133,6 +133,8 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
     var editing = false
     private var error: String?
     private var compactMenuItem: NSMenuItem?
+    private var stopMenuItem: NSMenuItem?
+    private let suggestions = AutomationSuggestions()
 
     init(note: TimerNote, app: AppController) {
         self.id = note.id
@@ -177,13 +179,18 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         labelField.action = #selector(commitLabel)
         labelField.stringValue = note.label
         labelField.setAccessibilityLabel("タイマーのラベル")
-        inputField.placeholderString = "17:45 / 1745 / 17 / 3m"
+        inputField.placeholderString = "17:45 / 3m / 名前"
         inputField.font = .monospacedSystemFont(ofSize: 17, weight: .regular)
         inputField.bezelStyle = .roundedBezel
         inputField.delegate = self
         inputField.target = self
         inputField.action = #selector(beginTimer)
-        inputField.setAccessibilityLabel("時刻または時間の長さ")
+        inputField.setAccessibilityLabel("時刻・時間の長さ・オートメーション名")
+        suggestions.choose = { [weak self] name in
+            self?.inputField.stringValue = name
+            self?.suggestions.hide()
+            self?.beginTimer()
+        }
         value.alignment = .center
         value.setAccessibilityLabel("残り時間")
         hint.font = .systemFont(ofSize: 11)
@@ -237,6 +244,9 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
             NSApp.changeWindowsItem(window, title: title, filename: false)
         }
         let running = note.deadline != nil && !note.isFinished(at: now) || note.pausedRemaining != nil
+        labelField.isEditable = note.automation == nil || !running
+        if note.automation != nil { labelField.stringValue = note.label }
+        stopMenuItem?.isHidden = note.automation == nil || !running
         let compact = note.isCompact
         surface.rounded = compact
         let inputMode = !compact && (editing || !running)
@@ -256,22 +266,27 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         start.isHidden = !inputMode
         value.isHidden = !compact && inputMode
         pause.isHidden = compact || !running || editing || (!app.state.preferences.pauseEnabled && note.pausedRemaining == nil)
-            || note.specification?.canPause != true
+            || !note.canPause
         setIcon(pause, symbol: note.pausedRemaining == nil ? "pause.fill" : "play.fill",
                 label: note.pausedRemaining == nil ? "一時停止" : "再開")
         if let seconds = note.remaining(at: now) {
             value.stringValue = RemainingTime.text(seconds: seconds, mode: app.state.preferences.effectiveDisplayMode)
         }
         if compact {
-            if note.isFinished(at: now) { value.stringValue = "終了しました" }
+            if note.automation?.stopped == true { value.stringValue = "中止しました" }
+            else if note.isFinished(at: now) { value.stringValue = "終了しました" }
             else if note.remaining(at: now) == nil { value.stringValue = "時間を設定" }
             else if note.pausedRemaining != nil { value.stringValue += " ⏸" }
         }
+        if compact || !inputMode { suggestions.hide() }
         value.toolTip = [note.label, note.deadline.map { app.deadlineDescription($0) + " に終了" } ?? "",
             "ダブルクリックで時間を設定 · 右クリックで操作UIを表示"].filter { !$0.isEmpty }.joined(separator: "\n")
         if inputMode { updatePreview(at: now) }
         else if note.pausedRemaining != nil { hint.stringValue = "一時停止中 · 再開するまで時間は進みません" }
-        else if let deadline = note.deadline { hint.stringValue = app.deadlineDescription(deadline) + " に終了" }
+        else if let deadline = note.deadline {
+            let progress = note.automation.map { "\($0.definition.name) · \($0.currentIndex + 1)/\($0.deadlines.count)\n" } ?? ""
+            hint.stringValue = progress + app.deadlineDescription(deadline) + " に終了"
+        }
         hint.textColor = error == nil ? .secondaryLabelColor : .systemRed
         layoutContents()
         if justFinished, NSApp.isActive, window?.isKeyWindow == true,
@@ -281,21 +296,32 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
     private func updatePreview(at now: Date) {
         if let error { hint.stringValue = error; return }
         let finished = app.note(id)?.isFinished(at: now) == true && !editing
-        let prefix = finished ? "終了しました\n" : ""
+        let prefix = finished ? (app.note(id)?.automation?.stopped == true ? "中止しました\n" : "終了しました\n") : ""
         let raw = inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            if raw.isEmpty {
-                if let previous = app.state.previous, let input = previous.input, let spec = previous.specification {
-                    let deadline = try spec.deadline(from: now)
-                    hint.stringValue = prefix + "Enterで \(input) · \(app.deadlineDescription(deadline)) に終了"
-                } else { hint.stringValue = prefix + "時刻は 17:45・1745・17、長さは 3m · Enterで開始" }
-            } else {
-                let spec = try TimeSpecification.parse(raw)
-                let deadline = try spec.deadline(from: now)
-                hint.stringValue = prefix + app.deadlineDescription(deadline) + " に終了 · あと "
-                    + RemainingTime.text(seconds: deadline.timeIntervalSince(now), showSeconds: true)
+            if raw.isEmpty, app.state.previous == nil {
+                hint.stringValue = prefix + "17:45・3m・オートメーション名 · Enterで開始"
+                return
             }
-        } catch { hint.stringValue = prefix + (error.localizedDescription) }
+            switch try TimerRequest.resolve(raw, previous: app.state.previous, library: app.automations) {
+            case .timer(let input, let spec):
+                let deadline = try spec.deadline(from: now)
+                hint.stringValue = prefix + (raw.isEmpty ? "Enterで \(input) · " : "")
+                    + app.deadlineDescription(deadline) + " に終了 · あと " + RemainingTime.text(seconds: deadline.timeIntervalSince(now), showSeconds: true)
+            case .automation(let definition):
+                let run = try AutomationRun(definition: definition, now: now)
+                if run.deadlines.last! <= now { hint.stringValue = prefix + "\(definition.name) · 今日の予定は終了しました" }
+                else {
+                    let label = definition.steps[run.currentIndex].label
+                    hint.stringValue = prefix + "\(definition.name) · \(run.currentIndex + 1)/\(run.deadlines.count) \(label)\n"
+                        + app.deadlineDescription(run.deadlines[run.currentIndex]) + " に終了 · Enterで開始"
+                }
+            }
+        } catch {
+            if !app.automations.matching(raw).isEmpty {
+                hint.stringValue = prefix + "↑↓でオートメーションを選択 · Enterで開始"
+            } else { hint.stringValue = prefix + error.localizedDescription }
+        }
     }
 
     private func layoutContents() {
@@ -347,6 +373,8 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
     }
 
     @objc func beginTimer() {
+        if suggestions.isVisible, let selected = suggestions.selectedName { inputField.stringValue = selected }
+        suggestions.hide()
         do {
             try app.start(id, raw: inputField.stringValue)
             inputField.stringValue = ""
@@ -354,6 +382,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
             error = nil
             window?.makeFirstResponder(nil)
             update(at: Date())
+            if app.note(id)?.isFinished(at: Date()) == true { focusInput() }
         } catch {
             self.error = error.localizedDescription
             update(at: Date())
@@ -381,6 +410,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
     }
 
     @objc func toggleControls() {
+        suggestions.hide()
         guard let window, let note = app.note(id) else { return }
         window.makeFirstResponder(nil)
         let topLeft = NSPoint(x: window.frame.minX, y: window.frame.maxY)
@@ -427,6 +457,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         _ = add("時間を設定…", #selector(contextEdit(_:)))
         _ = add("ラベルを編集…", #selector(contextLabel(_:)))
         _ = add("外観…", #selector(contextAppearance(_:)))
+        stopMenuItem = add("オートメーションを中止", #selector(contextStop(_:)))
         let close = NSMenuItem(title: "閉じる", action: #selector(contextClose(_:)), keyEquivalent: "")
         close.target = self
         menu.addItem(.separator())
@@ -441,6 +472,21 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
     @objc private func contextLabel(_ sender: NSMenuItem) { editLabel() }
     @objc private func contextAppearance(_ sender: NSMenuItem) { showAppearance() }
     @objc private func contextClose(_ sender: NSMenuItem) { window?.close() }
+    @objc private func contextStop(_ sender: NSMenuItem) { app.stopAutomation(id) }
+
+    func reloadSuggestions() {
+        guard !inputField.isHidden, window?.firstResponder === inputField.currentEditor(),
+              let editor = inputField.currentEditor() as? NSTextView, !editor.hasMarkedText() else { suggestions.hide(); return }
+        suggestions.show(app.automations.matching(inputField.stringValue), for: inputField)
+    }
+
+    func controlTextDidBeginEditing(_ notification: Notification) {
+        if notification.object as? NSTextField === inputField { reloadSuggestions() }
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        if notification.object as? NSTextField === inputField { suggestions.hide() }
+    }
 
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField else { return }
@@ -448,10 +494,16 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
             app.modify(id) { $0.label = String(field.stringValue.prefix(100)) }
             window?.title = field.stringValue.isEmpty ? "タイマー" : field.stringValue
             if let window { NSApp.changeWindowsItem(window, title: window.title, filename: false) }
-        } else { error = nil; updatePreview(at: Date()) }
+        } else { error = nil; updatePreview(at: Date()); reloadSuggestions() }
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if control === inputField, suggestions.isVisible, !textView.hasMarkedText() {
+            if commandSelector == #selector(NSResponder.moveDown(_:)) { suggestions.move(1); return true }
+            if commandSelector == #selector(NSResponder.moveUp(_:)) { suggestions.move(-1); return true }
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) { beginTimer(); return true }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) { suggestions.hide(); return true }
+        }
         if control === labelField, commandSelector == #selector(NSResponder.insertNewline(_:)) {
             commitLabel()
             return true
@@ -467,9 +519,10 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         return false
     }
 
-    func windowWillClose(_ notification: Notification) { app.close(id) }
-    func windowDidMove(_ notification: Notification) { saveFrame() }
-    func windowDidResize(_ notification: Notification) { saveFrame() }
+    func windowWillClose(_ notification: Notification) { suggestions.hide(); app.close(id) }
+    func windowDidResignKey(_ notification: Notification) { suggestions.hide() }
+    func windowDidMove(_ notification: Notification) { saveFrame(); reloadSuggestions() }
+    func windowDidResize(_ notification: Notification) { saveFrame(); reloadSuggestions() }
 
     func saveFrame() {
         guard let frame = window?.frame, app.note(id) != nil else { return }

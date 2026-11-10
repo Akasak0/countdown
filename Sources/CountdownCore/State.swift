@@ -55,8 +55,10 @@ public struct TimerNote: Codable, Identifiable {
     // Optional fields keep state files created by 0.1 readable.
     public var controlsHidden: Bool?
     public var expandedFrame: WindowFrame?
+    public var automation: AutomationRun?
 
     public var isCompact: Bool { controlsHidden == true }
+    public var canPause: Bool { automation == nil && specification?.canPause == true }
 
     public init(appearance: Appearance = Appearance()) { self.appearance = appearance }
 
@@ -73,6 +75,7 @@ public struct TimerNote: Codable, Identifiable {
         let end = try specification.deadline(from: now)
         self.input = input
         self.specification = specification
+        automation = nil
         deadline = end
         pausedRemaining = nil
         completionHandled = false
@@ -80,7 +83,7 @@ public struct TimerNote: Codable, Identifiable {
     }
 
     public mutating func pause(at now: Date) {
-        guard specification?.canPause == true, pausedRemaining == nil,
+        guard canPause, pausedRemaining == nil,
               let deadline, deadline > now else { return }
         pausedRemaining = deadline.timeIntervalSince(now)
         self.deadline = nil
@@ -92,11 +95,45 @@ public struct TimerNote: Codable, Identifiable {
         self.pausedRemaining = nil
     }
 
-    /// Returns true only for the first completion eligible for live effects.
+    /// Returns true once per eligible completion, including automation boundaries.
     public mutating func completeIfNeeded(at now: Date, allowEffects: Bool) -> Bool {
+        if automation != nil { return advanceAutomation(at: now, allowEffects: allowEffects) }
         guard isFinished(at: now), !completionHandled else { return false }
         completionHandled = true
         return allowEffects
+    }
+
+    public mutating func start(automation definition: AutomationDefinition, now: Date, order: Int,
+                               calendar: Calendar = .current) throws {
+        let run = try AutomationRun(definition: definition, now: now, calendar: calendar)
+        automation = run
+        input = definition.name
+        specification = .date(run.deadlines.last!)
+        pausedRemaining = nil
+        completionHandled = false
+        inputOrder = order
+        _ = advanceAutomation(at: now, allowEffects: false)
+    }
+
+    public mutating func stopAutomation(at now: Date) {
+        guard automation != nil else { return }
+        automation?.stopped = true
+        deadline = now
+        completionHandled = true
+    }
+
+    private mutating func advanceAutomation(at now: Date, allowEffects: Bool) -> Bool {
+        guard var run = automation, !run.stopped else { return false }
+        let target = run.deadlines.firstIndex { $0 > now } ?? (run.deadlines.count - 1)
+        let finished = now >= run.deadlines.last!
+        let boundary = target > run.currentIndex || (finished && !completionHandled)
+        run.currentIndex = target
+        label = run.definition.steps[target].label
+        deadline = run.deadlines[target]
+        completionHandled = finished
+        automation = run
+        return boundary && allowEffects && (run.definition.completionEffect == .each
+            || (run.definition.completionEffect == .last && finished))
     }
 }
 
@@ -134,6 +171,7 @@ public struct StateStore {
         guard FileManager.default.fileExists(atPath: url.path) else { return AppState() }
         let state = try JSONDecoder().decode(AppState.self, from: Data(contentsOf: url))
         guard state.version == 1 else { throw CocoaError(.coderReadCorrupt) }
+        for note in state.open + state.closed { try note.automation?.validate() }
         return state
     }
 

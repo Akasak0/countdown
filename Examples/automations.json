@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "automations": [
+    {
+      "name": "月曜の講義",
+      "completionEffect": "each",
+      "steps": [
+        { "label": "1限", "until": "10:30" },
+        { "label": "休憩", "duration": "10m" },
+        { "label": "2限", "duration": "90m" }
+      ]
+    },
+    {
+      "name": "集中と休憩",
+      "completionEffect": "last",
+      "steps": [
+        { "label": "集中", "duration": "25m" },
+        { "label": "休憩", "duration": "5m" },
+        { "label": "集中", "duration": "25m" }
+      ]
+    }
+  ]
+}

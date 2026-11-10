@@ -17,7 +17,7 @@ final class SettingsController: NSWindowController {
     init(app: AppController, noteID: UUID?) {
         self.app = app
         self.noteID = noteID
-        let height: CGFloat = noteID == nil ? 468 : 206
+        let height: CGFloat = noteID == nil ? 520 : 206
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 370, height: height),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = noteID == nil ? "設定" : "このタイマーの外観"
@@ -62,6 +62,9 @@ final class SettingsController: NSWindowController {
             footer.font = .systemFont(ofSize: 11)
             footer.textColor = .secondaryLabelColor
             stack.addArrangedSubview(footer)
+            let automations = NSButton(title: "オートメーションを作成・管理…", target: app, action: #selector(AppController.showAutomations(_:)))
+            automations.bezelStyle = .rounded
+            stack.addArrangedSubview(automations)
         }
         for control in [colors, opacity, floating, displayMode, pause, sound, notifications, confetti] as [NSControl] {
             control.target = self
