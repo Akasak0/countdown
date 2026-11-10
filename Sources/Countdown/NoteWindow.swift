@@ -177,7 +177,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
         labelField.action = #selector(commitLabel)
         labelField.stringValue = note.label
         labelField.setAccessibilityLabel("タイマーのラベル")
-        inputField.placeholderString = "17:45 または 3m"
+        inputField.placeholderString = "17:45 / 1745 / 17 / 3m"
         inputField.font = .monospacedSystemFont(ofSize: 17, weight: .regular)
         inputField.bezelStyle = .roundedBezel
         inputField.delegate = self
@@ -288,7 +288,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
                 if let previous = app.state.previous, let input = previous.input, let spec = previous.specification {
                     let deadline = try spec.deadline(from: now)
                     hint.stringValue = prefix + "Enterで \(input) · \(app.deadlineDescription(deadline)) に終了"
-                } else { hint.stringValue = prefix + "時刻は 17:45、長さは 3m · Enterで開始" }
+                } else { hint.stringValue = prefix + "時刻は 17:45・1745・17、長さは 3m · Enterで開始" }
             } else {
                 let spec = try TimeSpecification.parse(raw)
                 let deadline = try spec.deadline(from: now)

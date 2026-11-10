@@ -14,6 +14,10 @@ import Foundation
         checkEqual(try TimeSpecification.parse("9:5"), .clock(hour: 9, minute: 5, second: 0))
         checkEqual(try TimeSpecification.parse("09:05:03"), .clock(hour: 9, minute: 5, second: 3))
         checkEqual(try TimeSpecification.parse("9:5:3"), .clock(hour: 9, minute: 5, second: 3))
+        checkEqual(try TimeSpecification.parse("1234"), .clock(hour: 12, minute: 34, second: 0))
+        checkEqual(try TimeSpecification.parse("12"), .clock(hour: 12, minute: 0, second: 0))
+        checkEqual(try TimeSpecification.parse("0123"), .clock(hour: 1, minute: 23, second: 0))
+        checkEqual(try TimeSpecification.parse("0030"), .clock(hour: 0, minute: 30, second: 0))
         checkEqual(try TimeSpecification.parse("1h30m"), .duration(5400))
         checkEqual(try TimeSpecification.parse("1h5s"), .duration(3605))
         checkEqual(try TimeSpecification.parse("90s"), .duration(90))
@@ -21,7 +25,7 @@ import Foundation
     }
 
     @Test func testInvalidAndOverflowInputs() {
-        for text in ["", "3", "1745", "24:00", "1:60", "1:2:60", "1:", "1:2:3:4", "-1m", "0s",
+        for text in ["", "3", "123", "12345", "2400", "1260", "24", "24:00", "1:60", "1:2:60", "1:", "1:2:3:4", "-1m", "0s",
                      "1m2h", "1m2m", "1.5m", "1:30m", "3M", "１m", "1h 3m", "999999999999999999999999999999999999999999h"] {
             checkThrows(try TimeSpecification.parse(text), "Unexpected acceptance: \(text)")
         }
