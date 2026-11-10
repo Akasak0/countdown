@@ -317,7 +317,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     @objc private func showHelp(_ sender: Any?) {
         let alert = NSAlert()
         alert.messageText = "時間の付箋を置く"
-        alert.informativeText = "17:45 / 9:5:3 → 次に来るその時刻\n3m / 1h30m / 90s → 今からその長さ\n\n空欄でEnter → 前回の指定を再利用\n数字をダブルクリック → 時間を変更\nカレンダーボタン → 終了日時を指定\nスライダーボタン → この窓の外観\n\n⌘N 新規　⌘W 閉じる　⇧⌘T 復元\n⇧⌘U 操作UIの表示切り替え\n⌘M 最小化　⌘H アプリを隠す\n⌘, 設定　⌘Q 保存して終了\n\n設定で表示を分・時:分:秒・自動から選べます。\n小窓でもラベルがあれば表示します。\n最小化やスリープでも時間は進みます。\n\n閉じた窓は直近30件まで復元できます。\n閉じた窓は通知せず、復元時に元の締切から表示します。"
+        alert.informativeText = "17:45 / 1745 / 17 / 9:5:3 → 次に来るその時刻\n3m / 1h30m / 90s → 今からその長さ\n\n空欄でEnter → 前回の指定を再利用\n数字をダブルクリック → 時間を変更\nカレンダーボタン → 終了日時を指定\nスライダーボタン → この窓の外観\n\n⌘N 新規　⌘W 閉じる　⇧⌘T 復元\n⇧⌘U 操作UIの表示切り替え\n⌘M 最小化　⌘H アプリを隠す\n⌘, 設定　⌘Q 保存して終了\n\n設定で表示を分・時:分:秒・自動から選べます。\n小窓でもラベルがあれば表示します。\n最小化やスリープでも時間は進みます。\n\n閉じた窓は直近30件まで復元できます。\n閉じた窓は通知せず、復元時に元の締切から表示します。"
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }

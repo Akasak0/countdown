@@ -5,7 +5,7 @@ public enum TimeInputError: Error, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .invalid: return "17:45 または 3m の形式で入力してください。"
+        case .invalid: return "17:45、1745、17 または 3m の形式で入力してください。"
         case .tooLong: return "時間の長さは365日以内で指定してください。"
         case .pastDate: return "指定した日時は過ぎています。終了日時を指定し直してください。"
         }
@@ -27,6 +27,13 @@ public enum TimeSpecification: Codable, Equatable {
             let second = pieces.count == 3 ? Int(pieces[2])! : 0
             guard hour < 24, minute < 60, second < 60 else { throw TimeInputError.invalid }
             return .clock(hour: hour, minute: minute, second: second)
+        }
+        if (text.count == 2 || text.count == 4), text.utf8.allSatisfy({ (48...57).contains($0) }) {
+            let digits = Array(text.utf8)
+            let hour = Int(digits[0] - 48) * 10 + Int(digits[1] - 48)
+            let minute = digits.count == 4 ? Int(digits[2] - 48) * 10 + Int(digits[3] - 48) : 0
+            guard hour < 24, minute < 60 else { throw TimeInputError.invalid }
+            return .clock(hour: hour, minute: minute, second: 0)
         }
         let expression = try NSRegularExpression(pattern: "^(?:([0-9]+)h)?(?:([0-9]+)m)?(?:([0-9]+)s)?$")
         let range = NSRange(text.startIndex..., in: text)
