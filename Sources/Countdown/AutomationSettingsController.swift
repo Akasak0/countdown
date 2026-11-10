@@ -2,6 +2,36 @@ import AppKit
 import UniformTypeIdentifiers
 import CountdownCore
 
+private final class AutomationStepField: NSTextField {
+    var activateRow: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        activateRow?()
+        super.mouseDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { activateRow?() }
+        return accepted
+    }
+}
+
+private final class AutomationStepModeButton: NSPopUpButton {
+    var activateRow: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        activateRow?()
+        super.mouseDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { activateRow?() }
+        return accepted
+    }
+}
+
 final class AutomationSettingsController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate {
     unowned let app: AppController
     private var draft: AutomationLibrary
@@ -13,6 +43,9 @@ final class AutomationSettingsController: NSWindowController, NSTableViewDataSou
     private let effects = NSPopUpButton()
     private let status = NSTextField(wrappingLabelWithString: "")
     private let editor = NSStackView()
+    private var removeStepButton: NSButton?
+    private var moveStepUpButton: NSButton?
+    private var moveStepDownButton: NSButton?
     private var selected: Int? { draft.automations.indices.contains(list.selectedRow) ? list.selectedRow : nil }
 
     init(app: AppController) {
@@ -83,10 +116,14 @@ final class AutomationSettingsController: NSWindowController, NSTableViewDataSou
         let stepScroll = scroll(steps)
         editor.addArrangedSubview(stepScroll)
         stepScroll.widthAnchor.constraint(equalTo: editor.widthAnchor).isActive = true
-        editor.addArrangedSubview(row([
-            button("区間を追加", #selector(addStep)), button("削除", #selector(removeStep)),
-            button("↑", #selector(moveStepUp)), button("↓", #selector(moveStepDown))
-        ]))
+        let remove = button("区間を削除", #selector(removeStep))
+        let up = button("↑", #selector(moveStepUp))
+        let down = button("↓", #selector(moveStepDown))
+        removeStepButton = remove
+        moveStepUpButton = up
+        moveStepDownButton = down
+        remove.toolTip = "選択した区間を削除"
+        editor.addArrangedSubview(row([button("区間を追加", #selector(addStep)), remove, up, down]))
         let note = NSTextField(wrappingLabelWithString: "音・通知・紙吹雪は一般設定に従います。実行中の内容は、ここで編集しても変わりません。")
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
@@ -164,7 +201,8 @@ final class AutomationSettingsController: NSWindowController, NSTableViewDataSou
         }
         guard let selected else { return nil }
         let step = draft.automations[selected].steps[row]
-        let field = NSTextField()
+        let field = AutomationStepField()
+        field.activateRow = { [weak self] in self?.selectStep(row) }
         field.tag = row
         field.delegate = self
         field.font = .systemFont(ofSize: 12)
@@ -179,7 +217,8 @@ final class AutomationSettingsController: NSWindowController, NSTableViewDataSou
         field.stringValue = step.until ?? step.duration ?? ""
         field.placeholderString = step.until != nil ? "10:30" : "25m"
         field.setAccessibilityLabel("区間\(row + 1)の時間")
-        let mode = NSPopUpButton()
+        let mode = AutomationStepModeButton()
+        mode.activateRow = { [weak self] in self?.selectStep(row) }
         mode.controlSize = .small
         mode.addItems(withTitles: ["時刻まで", "時間の長さ"])
         mode.selectItem(at: step.until != nil ? 0 : 1)
@@ -193,6 +232,22 @@ final class AutomationSettingsController: NSWindowController, NSTableViewDataSou
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         if notification.object as? NSTableView === list { loadEditor() }
+        else if notification.object as? NSTableView === steps { updateStepActions() }
+    }
+
+    private func selectStep(_ index: Int) {
+        guard let selected, draft.automations[selected].steps.indices.contains(index) else { return }
+        steps.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        updateStepActions()
+    }
+
+    private func updateStepActions() {
+        let count = selected.map { draft.automations[$0].steps.count } ?? 0
+        let index = steps.selectedRow
+        let valid = (0..<count).contains(index)
+        removeStepButton?.isEnabled = valid
+        moveStepUpButton?.isEnabled = valid && index > 0
+        moveStepDownButton?.isEnabled = valid && index + 1 < count
     }
 
     private func loadEditor() {
@@ -201,7 +256,9 @@ final class AutomationSettingsController: NSWindowController, NSTableViewDataSou
         name.isEnabled = definition != nil
         effects.isEnabled = definition != nil
         effects.selectItem(at: AutomationEffect.allCases.firstIndex(of: definition?.completionEffect ?? .each) ?? 0)
+        steps.deselectAll(nil)
         steps.reloadData()
+        updateStepActions()
     }
 
     private func changed() {
@@ -235,6 +292,9 @@ final class AutomationSettingsController: NSWindowController, NSTableViewDataSou
     @objc private func stepModeChanged(_ sender: NSPopUpButton) {
         guard let selected else { return }
         let index = sender.tag
+        selectStep(index)
+        let wasClock = draft.automations[selected].steps[index].until != nil
+        guard (sender.indexOfSelectedItem == 0) != wasClock else { return }
         if sender.indexOfSelectedItem == 0 {
             draft.automations[selected].steps[index].until = "10:30"
             draft.automations[selected].steps[index].duration = nil
@@ -243,6 +303,7 @@ final class AutomationSettingsController: NSWindowController, NSTableViewDataSou
             draft.automations[selected].steps[index].until = nil
         }
         steps.reloadData()
+        selectStep(index)
         changed()
     }
 
@@ -291,8 +352,13 @@ final class AutomationSettingsController: NSWindowController, NSTableViewDataSou
 
     @objc private func removeStep() {
         guard let selected, draft.automations[selected].steps.indices.contains(steps.selectedRow) else { return }
-        draft.automations[selected].steps.remove(at: steps.selectedRow)
+        let index = steps.selectedRow
+        window?.makeFirstResponder(steps)
+        draft.automations[selected].steps.remove(at: index)
         steps.reloadData()
+        let count = draft.automations[selected].steps.count
+        if count > 0 { selectStep(min(index, count - 1)) }
+        else { steps.deselectAll(nil); updateStepActions() }
         changed()
     }
 
@@ -303,6 +369,7 @@ final class AutomationSettingsController: NSWindowController, NSTableViewDataSou
         let source = steps.selectedRow, destination = source + delta
         guard draft.automations[selected].steps.indices.contains(source),
               draft.automations[selected].steps.indices.contains(destination) else { return }
+        window?.makeFirstResponder(steps)
         draft.automations[selected].steps.swapAt(source, destination)
         steps.reloadData()
         steps.selectRowIndexes(IndexSet(integer: destination), byExtendingSelection: false)
