@@ -286,7 +286,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     private var active: NoteWindowController? {
-        controllers.values.first { $0.window === NSApp.keyWindow }
+        if let selected = NSApp.keyWindow ?? NSApp.mainWindow {
+            return controllers.values.first { $0.window === selected }
+        }
+        // A borderless timer can be visible without a key or main window after
+        // changing its style mask. Keep menu actions bound to the front timer.
+        for window in NSApp.orderedWindows where window.isVisible && !window.isMiniaturized {
+            if let controller = controllers.values.first(where: { $0.window === window }) { return controller }
+        }
+        return nil
     }
 
     @objc private func editActive(_ sender: Any?) { active?.editTime() }
@@ -296,8 +304,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     @objc private func controlsActive(_ sender: Any?) { active?.toggleControls() }
     @objc private func pauseActive(_ sender: Any?) { active?.togglePause() }
     @objc private func closeKeyWindow(_ sender: Any?) {
-        guard NSApp.modalWindow == nil, let window = NSApp.keyWindow, window.attachedSheet == nil, !window.isSheet else { return }
+        guard NSApp.modalWindow == nil, let window = active?.window,
+              window.attachedSheet == nil, !window.isSheet else { return }
         window.close()
+    }
+    @objc private func miniaturizeActive(_ sender: Any?) {
+        guard NSApp.modalWindow == nil, let window = active?.window,
+              window.attachedSheet == nil, !window.isSheet else { return }
+        window.miniaturize(nil)
     }
     @objc private func floatActive(_ sender: Any?) {
         guard let active else { return }
@@ -325,7 +339,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(closeKeyWindow(_:)):
-            guard NSApp.modalWindow == nil, let window = NSApp.keyWindow else { return false }
+            guard NSApp.modalWindow == nil, let window = active?.window else { return false }
+            return window.attachedSheet == nil && !window.isSheet
+        case #selector(miniaturizeActive(_:)):
+            guard NSApp.modalWindow == nil, let window = active?.window else { return false }
             return window.attachedSheet == nil && !window.isSheet
         case #selector(restoreTimer(_:)): return !state.closed.isEmpty
         case #selector(editActive(_:)), #selector(detailsActive(_:)), #selector(appearanceActive(_:)), #selector(labelActive(_:)), #selector(resizeActive(_:)):
@@ -395,7 +412,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             add(view, title, #selector(resizeActive(_:)), target: self).tag = index
         }
         let windows = section("ウィンドウ")
-        add(windows, "最小化", #selector(NSWindow.performMiniaturize(_:)), "m")
+        add(windows, "最小化", #selector(miniaturizeActive(_:)), "m", target: self)
         add(windows, "すべてを手前に移動", #selector(NSApplication.arrangeInFront(_:)), target: NSApp)
         NSApp.windowsMenu = windows
         let help = section("ヘルプ")
