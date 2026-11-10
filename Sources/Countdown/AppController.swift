@@ -7,6 +7,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     var controllers: [UUID: NoteWindowController] = [:]
     private var settings: SettingsController?
     private var appearanceWindows: [UUID: SettingsController] = [:]
+    private var automationWindow: AutomationSettingsController?
+    private(set) var automations = AutomationLibrary()
+    private(set) var automationData: Data?
+    private(set) var automationError: String?
+    private var lastAutomationErrorShown: String?
+    let automationStore: AutomationStore
     private var ticker: Timer?
     private var pendingSave: DispatchWorkItem?
     private var lastTick = Date()
@@ -16,9 +22,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var canSave = false
     private let store: StateStore
 
-    override init() {
+    init(dataDirectory: URL? = nil) {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        store = StateStore(url: support.appendingPathComponent("Countdown/state.json"))
+        let directory = dataDirectory ?? support.appendingPathComponent("Countdown")
+        store = StateStore(url: directory.appendingPathComponent("state.json"))
+        automationStore = AutomationStore(url: directory.appendingPathComponent("automations.json"))
         super.init()
     }
 
@@ -34,6 +42,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             NSApp.terminate(nil)
             return
         }
+        reloadAutomations()
         let now = Date()
         for index in state.open.indices {
             _ = state.open[index].completeIfNeeded(at: now, allowEffects: false)
@@ -56,6 +65,49 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if let controller = automationWindow, let window = controller.window,
+           !controller.windowShouldClose(window) { return .terminateCancel }
+        return .terminateNow
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if canSave { reloadAutomations() }
+    }
+
+    func reloadAutomations() {
+        do {
+            let data = try automationStore.data()
+            let library = try data.map { try AutomationLibrary.decode($0) } ?? AutomationLibrary()
+            automations = library
+            automationData = data
+            automationError = nil
+            lastAutomationErrorShown = nil
+        } catch { automationError = error.localizedDescription }
+        automationWindow?.showLoadError(automationError)
+        if let message = automationError, message != lastAutomationErrorShown,
+           automationWindow?.window?.isVisible != true {
+            lastAutomationErrorShown = message
+            showError("オートメーションのJSONを読み込めませんでした。\n\(message)\n\n実行中のタイマーは継続します。\n\(automationStore.url.path)")
+        }
+    }
+
+    func saveAutomations(_ library: AutomationLibrary, replacing expected: Data?) throws {
+        automationData = try automationStore.save(library, replacing: expected)
+        automations = library
+        automationError = nil
+        for controller in controllers.values { controller.reloadSuggestions() }
+    }
+
+    @objc func showAutomations(_ sender: Any?) {
+        reloadAutomations()
+        if automationWindow == nil { automationWindow = AutomationSettingsController(app: self) }
+        automationWindow?.refreshIfUnedited()
+        automationWindow?.showWindow(nil)
+        automationWindow?.window?.makeKeyAndOrderFront(nil)
+        automationWindow?.showLoadError(automationError)
+    }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if controllers.isEmpty { newTimer(nil) }
@@ -117,17 +169,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func start(_ id: UUID, raw: String) throws {
-        let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let spec: TimeSpecification
-        let savedInput: String
-        if input.isEmpty {
-            guard let previous = state.previous, let previousSpec = previous.specification, let previousInput = previous.input else {
-                throw TimeInputError.invalid
-            }
-            spec = previousSpec
-            savedInput = previousInput
-        } else { spec = try TimeSpecification.parse(input); savedInput = input }
-        try start(id, input: savedInput, specification: spec)
+        reloadAutomations()
+        let request = try TimerRequest.resolve(raw, previous: state.previous, library: automations)
+        switch request {
+        case .timer(let input, let spec): try start(id, input: input, specification: spec)
+        case .automation(let definition):
+            guard let index = state.open.firstIndex(where: { $0.id == id }) else { return }
+            let order = state.sequence + 1
+            try state.open[index].start(automation: definition, now: Date(), order: order)
+            state.sequence = order
+            saveSoon()
+            refresh()
+        }
     }
 
     private func start(_ id: UUID, input: String, specification: TimeSpecification) throws {
@@ -146,18 +199,26 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         refresh()
     }
 
+    func stopAutomation(_ id: UUID) {
+        modify(id) { $0.stopAutomation(at: Date()) }
+        refresh()
+    }
+
     private func tick(allowEffects: Bool? = nil) {
         let now = Date()
         let effects = allowEffects ?? (!sleeping && now.timeIntervalSince(lastTick) < 3)
         lastTick = now
-        var completed: [TimerNote] = []
+        var completed: [(TimerNote, Bool)] = []
         var changed = false
         for index in state.open.indices {
-            let old = state.open[index].completionHandled
-            if state.open[index].completeIfNeeded(at: now, allowEffects: effects) { completed.append(state.open[index]) }
-            if old != state.open[index].completionHandled { changed = true }
+            let old = state.open[index]
+            if state.open[index].completeIfNeeded(at: now, allowEffects: effects) {
+                completed.append((old, state.open[index].isFinished(at: now)))
+            }
+            if old.completionHandled != state.open[index].completionHandled
+                || old.automation?.currentIndex != state.open[index].automation?.currentIndex { changed = true }
         }
-        for note in completed { finish(note) }
+        for (note, final) in completed { finish(note, final: final) }
         refresh(at: now)
         if changed { saveSoon() }
     }
@@ -169,13 +230,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     @objc private func willSleep(_ notification: Notification) { sleeping = true; saveNow() }
     @objc private func didWake(_ notification: Notification) { tick(allowEffects: false); sleeping = false; lastTick = Date() }
 
-    private func finish(_ note: TimerNote) {
+    private func finish(_ note: TimerNote, final: Bool) {
         if state.preferences.soundEnabled { NSSound(named: "Glass")?.play() }
         if state.preferences.confettiEnabled { controllers[note.id]?.celebrate() }
         if state.preferences.notificationsEnabled {
             let content = UNMutableNotificationContent()
-            content.title = note.label.isEmpty ? "タイマー" : note.label
-            content.body = "終了しました"
+            content.title = note.label.isEmpty ? (note.automation?.definition.name ?? "タイマー") : note.label
+            content.body = final ? "終了しました" : "この区間が終了し、次の区間へ進みました"
             // Sound is an independent opt-in and is played above, once.
             let request = UNNotificationRequest(identifier: note.id.uuidString, content: content, trigger: nil)
             UNUserNotificationCenter.current().add(request) { error in
@@ -286,7 +347,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     private var active: NoteWindowController? {
-        controllers.values.first { $0.window === NSApp.keyWindow }
+        if let selected = NSApp.keyWindow ?? NSApp.mainWindow {
+            return controllers.values.first { $0.window === selected }
+        }
+        // A borderless timer can be visible without a key or main window after
+        // changing its style mask. Keep menu actions bound to the front timer.
+        for window in NSApp.orderedWindows where window.isVisible && !window.isMiniaturized {
+            if let controller = controllers.values.first(where: { $0.window === window }) { return controller }
+        }
+        return nil
     }
 
     @objc private func editActive(_ sender: Any?) { active?.editTime() }
@@ -295,9 +364,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     @objc private func labelActive(_ sender: Any?) { active?.editLabel() }
     @objc private func controlsActive(_ sender: Any?) { active?.toggleControls() }
     @objc private func pauseActive(_ sender: Any?) { active?.togglePause() }
+    @objc private func stopAutomationActive(_ sender: Any?) { if let active { stopAutomation(active.id) } }
+    private var commandWindow: NSWindow? { NSApp.keyWindow ?? active?.window }
+
     @objc private func closeKeyWindow(_ sender: Any?) {
-        guard NSApp.modalWindow == nil, let window = NSApp.keyWindow, window.attachedSheet == nil, !window.isSheet else { return }
-        window.close()
+        guard NSApp.modalWindow == nil, let window = commandWindow,
+              window.attachedSheet == nil, !window.isSheet else { return }
+        // Auxiliary windows also use Cmd-W, including their unsaved-changes prompt.
+        window.performClose(nil)
+    }
+    @objc private func miniaturizeActive(_ sender: Any?) {
+        guard NSApp.modalWindow == nil, let window = commandWindow, window.styleMask.contains(.miniaturizable),
+              window.attachedSheet == nil, !window.isSheet else { return }
+        window.miniaturize(nil)
     }
     @objc private func floatActive(_ sender: Any?) {
         guard let active else { return }
@@ -317,7 +396,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     @objc private func showHelp(_ sender: Any?) {
         let alert = NSAlert()
         alert.messageText = "時間の付箋を置く"
-        alert.informativeText = "17:45 / 1745 / 17 / 9:5:3 → 次に来るその時刻\n3m / 1h30m / 90s → 今からその長さ\n\n空欄でEnter → 前回の指定を再利用\n数字をダブルクリック → 時間を変更\nカレンダーボタン → 終了日時を指定\nスライダーボタン → この窓の外観\n\n⌘N 新規　⌘W 閉じる　⇧⌘T 復元\n⇧⌘U 操作UIの表示切り替え\n⌘M 最小化　⌘H アプリを隠す\n⌘, 設定　⌘Q 保存して終了\n\n設定で表示を分・時:分:秒・自動から選べます。\n小窓でもラベルがあれば表示します。\n最小化やスリープでも時間は進みます。\n\n閉じた窓は直近30件まで復元できます。\n閉じた窓は通知せず、復元時に元の締切から表示します。"
+        alert.informativeText = "17:45 / 1745 / 17 / 9:5:3 → 次に来るその時刻\n3m / 1h30m / 90s → 今からその長さ\n保存したオートメーション名 → 区間を順番に実行\n名前の候補は↑↓とEnterで選択\n⌘, の「オートメーションを作成・管理…」で編集\n\n空欄でEnter → 前回の指定を再利用\n数字をダブルクリック → 時間を変更\nカレンダーボタン → 終了日時を指定\nスライダーボタン → この窓の外観\n\n⌘N 新規　⌘W 閉じる　⇧⌘T 復元\n⇧⌘U 操作UIの表示切り替え\n⌘M 最小化　⌘H アプリを隠す\n⌘, 設定　⌘Q 保存して終了\n\n設定で表示を分・時:分:秒・自動から選べます。\n小窓でもラベルがあれば表示します。\n最小化やスリープでも時間は進みます。\n\n閉じた窓は直近30件まで復元できます。\n閉じた窓は通知せず、復元時に元の締切から表示します。"
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
@@ -325,7 +404,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(closeKeyWindow(_:)):
-            guard NSApp.modalWindow == nil, let window = NSApp.keyWindow else { return false }
+            guard NSApp.modalWindow == nil, let window = commandWindow else { return false }
+            return window.attachedSheet == nil && !window.isSheet
+        case #selector(miniaturizeActive(_:)):
+            guard NSApp.modalWindow == nil, let window = commandWindow, window.styleMask.contains(.miniaturizable) else { return false }
             return window.attachedSheet == nil && !window.isSheet
         case #selector(restoreTimer(_:)): return !state.closed.isEmpty
         case #selector(editActive(_:)), #selector(detailsActive(_:)), #selector(appearanceActive(_:)), #selector(labelActive(_:)), #selector(resizeActive(_:)):
@@ -339,7 +421,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         case #selector(pauseActive(_:)):
             guard let active, let note = note(active.id) else { return false }
             item.title = note.pausedRemaining == nil ? "一時停止" : "再開"
-            return note.pausedRemaining != nil || (state.preferences.pauseEnabled && note.specification?.canPause == true && (note.remaining(at: Date()) ?? 0) > 0)
+            return note.pausedRemaining != nil || (state.preferences.pauseEnabled && note.canPause && (note.remaining(at: Date()) ?? 0) > 0)
+        case #selector(stopAutomationActive(_:)):
+            return active.flatMap { note($0.id) }.map { $0.automation != nil && !$0.isFinished(at: Date()) } ?? false
         default: return true
         }
     }
@@ -365,6 +449,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         add(app, "Countdownについて", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp)
         app.addItem(.separator())
         add(app, "設定…", #selector(showSettings(_:)), ",", target: self)
+        add(app, "オートメーション…", #selector(showAutomations(_:)), target: self)
         app.addItem(.separator())
         add(app, "Countdownを隠す", #selector(NSApplication.hide(_:)), "h", target: NSApp)
         add(app, "すべてを表示", #selector(NSApplication.unhideAllApplications(_:)), target: NSApp)
@@ -387,6 +472,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         add(timer, "終了日時を指定…", #selector(detailsActive(_:)), target: self)
         add(timer, "ラベルを編集…", #selector(labelActive(_:)), target: self)
         add(timer, "一時停止", #selector(pauseActive(_:)), target: self)
+        add(timer, "オートメーションを中止", #selector(stopAutomationActive(_:)), target: self)
         let view = section("表示")
         add(view, "操作UIを隠す", #selector(controlsActive(_:)), "u", target: self, shift: true)
         add(view, "最前面に表示", #selector(floatActive(_:)), target: self)
@@ -395,7 +481,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             add(view, title, #selector(resizeActive(_:)), target: self).tag = index
         }
         let windows = section("ウィンドウ")
-        add(windows, "最小化", #selector(NSWindow.performMiniaturize(_:)), "m")
+        add(windows, "最小化", #selector(miniaturizeActive(_:)), "m", target: self)
         add(windows, "すべてを手前に移動", #selector(NSApplication.arrangeInFront(_:)), target: NSApp)
         NSApp.windowsMenu = windows
         let help = section("ヘルプ")
