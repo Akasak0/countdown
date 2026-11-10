@@ -441,6 +441,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate, NSTextFi
             window.setFrame(frame, display: true)
         }
         saveFrame()
+        window.makeKeyAndOrderFront(nil)
         if !compact, note.deadline == nil || note.isFinished(at: Date()) { focusInput() }
     }
 
